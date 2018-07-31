@@ -1,0 +1,268 @@
+#!/usr/bin/env bash
+
+# Move table T within localhost as per Unix 'mv' command. The
+# destination name of the table can be changed. If requested
+# in the options, a backup of the table at the destination,
+# which will be overwritten, is created as <table_name>_old<n>> where
+# <n> is found dynamically to be one more than the highest
+# existing <n>.
+#
+# Examples:
+#
+# 1   ./dbmvlocal mySQLUsrName srcDb srcTbl dstTbl
+# 2   ./dbmvlocal --dstDb otherDb mySQLUsrName srcDb srcTbl dstTbl
+# 3   ./dbmvlocal --backup --dstDb otherDb mySQLUsrName srcDb srcTbl destTbl
+# 4   ./dbmvlocal --dstDb otherDb mySQLUsrName srcDb srcTbl
+# 5   ./dbmvlocal mySQLUsrName srcDb srcTbl
+#
+# 1:   o If dstTbl does not exist, rename srcDb.srcTbl
+#        to srcDb.dstTbl
+#        else first drop dstTbl, then rename.
+# 2:   o Just like 1. Renaming works across databases,
+#        and is very fast.
+# 3.   o Back up destination table if it exists:
+#        find <n> by starting with n=1, testing
+#        for the existence of dstTbl_old<n>, and
+#        incrementing <n> until a non-existing tbl name
+#        is found.
+#      o Rename dest table to the backup name.
+#      o Rename srcDb.src table to otherDb.destTbl.
+#      o drop srcTbl
+# 4.   o Destination table name not provided, so table 
+#        in dstDb will be named srcTbl
+# 5.   o Destination table name omitted, so taken to be
+#        the same as srcTbl. Therefore: Error: cannot mv 
+#        table into itself.
+#
+# Prerequisites:
+#   o Must have --login-path set up for the specified user.
+#     Or specified user must be able to access w/o pwd.
+#   o Given user must have privileges to DROP, CREATE, INSERT
+
+CURR_DIR=$(dirname $0)
+source ${CURR_DIR}/db_series_helper.sh
+
+read -r -d '' USAGE <<EOF
+Usage: $(basename $0) [-h|--help] [-v|--verbose] [-b|--backup] [-d|--dstDb] mySQLUser srcDb srcTbl [destTbl]
+EOF
+
+if [ "$(uname)" == "Darwin" ]
+then
+    if [[ ! -e /usr/local/Cellar/gnu-getopt/1.1.6/bin/getopt ]]
+    then
+        echoerr "Getopt program on Mac is incompatible. Do: 'brew install gnu-getopt' and try again."
+        exit 1
+    fi
+    getopt="/usr/local/Cellar/gnu-getopt/1.1.6/bin/getopt"
+else
+    getopt=$(which getopt)
+fi
+
+#echo "getopt: $getopt"
+
+OPTS=$(${getopt} --options hvbd: --long help,verbose,backup,dstDb: -- "$@")
+
+if [ $? != 0 ]
+then 
+   echoerr "Failed parsing options; ${USAGE}"
+   exit 1
+fi
+
+eval set -- $OPTS
+
+BACKUP=0
+VERBOSE=0
+
+while true; do
+  case "$1" in
+    -b | --backup ) BACKUP=1; shift;;
+    -v | --verbose ) VERBOSE=1; shift;;
+    -d | --dstDb ) DST_DB="$2"; shift; shift ;;
+    -h | --help ) echo $USAGE; exit 0 ;;
+    -- ) shift; 
+	 break ;;
+    * ) echoerr "Could not assign options." ; 
+	exit 1 ;;
+  esac
+done
+
+if [[ $# < 3 ]]
+then
+    echoerr "Too few arguments. ${USAGE}"
+    exit 1
+fi
+
+LOC_USER=$1
+LOC_DB=$2
+LOC_TBL=$3
+if [[ -z $4 ]]
+then
+    DST_TBL=${LOC_TBL}
+else
+    DST_TBL=$4
+fi
+
+# Default: copy to same db as where source tbl lives:
+if [[ -z $DST_DB ]]
+then
+    DST_DB=${LOC_DB}
+fi
+
+if [ ${LOC_DB} == ${DST_DB} ]
+then
+  SAME_DBS=1
+else
+  SAME_DBS=0
+fi
+
+# New table is to reside in same db as
+# source table, ensure different names:
+if [[ ${SAME_DBS} == 1 && ${LOC_TBL} == ${DST_TBL} ]]
+then
+    echoerr "Cannot move table into itself."
+    exit 1
+fi
+
+#**********
+# echo "LOC_USER: '$LOC_USER'"
+# echo "LOC_DB: '$LOC_DB'"
+# echo "LOC_TBL: '$LOC_TBL'"
+# echo "DST_DB: '$DST_DB'"
+# echo "DST_TBL: '$DST_TBL'"
+#**********
+
+
+#----------------------------- Existence Checks --------------------------
+
+LOC_DB_EXISTS=$(db_exists $LOC_USER $LOC_DB)
+
+if [[ $? -gt 0 ]]
+then
+    echoerr "Could not check for existence of $LOC_DB. Nothing done; quitting."
+    exit 1
+fi
+
+if [[ ${LOC_DB_EXISTS} -eq 0 ]]
+then
+   echoerr "No datase named '${LOC_DB}' exists. Nothing done; quitting."
+   exit 1
+fi
+
+DST_DB_EXISTS=$(db_exists $LOC_USER $DST_DB)
+if [[ ${DST_DB_EXISTS} -eq 0 ]]
+then
+   echoerr "No destination datase named '${DST_DB}' exists. Nothing done; quitting."
+   exit 1
+fi
+
+LOC_TBL_EXISTS=$(tbl_exists $LOC_USER $LOC_DB $LOC_TBL)
+
+if [[ ${LOC_TBL_EXISTS} -eq 0 ]]
+then
+   echoerr "No source table named '${LOC_TBL}' exists in database '${LOC_DB}'. Nothing done; quitting."
+   exit 1
+fi
+
+# Determine whether remote table already
+# exists. If yes, fine. That just means
+# more actions further down:
+
+DST_TBL_EXISTS=$(tbl_exists ${LOC_USER} ${DST_DB} ${DST_TBL})
+
+# ------------ Backup dest tbl if it exists, and is requested ----------
+
+if [[ ${BACKUP} -ne 0 && ${DST_TBL_EXISTS} -ne 0 ]]
+then
+
+   # Find a backup name for the dest tbl that's not taken:
+   BACKUP_NAME=$(new_tbl_name ${LOC_USER} ${DST_DB} ${DST_TBL}_old)
+
+   if [[ ${VERBOSE} -ne 0 ]]
+   then
+       echo "Renaming ${DST_DB}.${DST_TBL} to ${DST_DB}.${BACKUP_NAME}..."
+   fi
+
+   mysql --login-path=${LOC_USER} ${DST_DB} -e "RENAME TABLE ${DST_TBL} TO ${BACKUP_NAME}" 2>/dev/null
+
+   if [[ $? != 0 ]]
+   then
+       # Try once more with -u and no pwd:
+       mysql -u ${LOC_USER} ${DST_DB} -e "RENAME TABLE ${DST_TBL} TO ${BACKUP_NAME}"
+       err_code=$?
+       if [[ $err_code != 0 ]]
+       then
+           echoerr "MySQL error while renaming '${DST_DB}.${DST_TBL}' to '${DST_DB}.${BACKUP_NAME}'. Quitting."
+           exit $err_code
+       fi
+   fi
+
+   # Destination table no longer exists:
+   DST_TBL_EXISTS=0
+fi
+
+#--------- Do the Move a.k.a. Rename --------------
+
+# If destination table exists, drop it.
+# Then rename the source. Note that renaming
+# works across databases, and is instantaneous,
+# unless someone holds a lock.
+#
+# (backup of dest done above if requested.):
+
+# Drop destination tbl if exists:
+
+if [[ ${DST_TBL_EXISTS} -ne 0 && ${BACKUP} -eq 0 ]]
+then
+  if [[ ${VERBOSE} -ne 0 ]]
+  then
+      echo "Dropping ${DST_DB}.${DST_TBL}..."
+  fi
+
+  mysql --login-path=${LOC_USER} ${DST_DB} -e "DROP TABLE ${DST_TBL}" 2>/dev/null
+
+  if [[ $? != 0 ]]
+  then
+      # Try once more with -u and no pwd:
+      mysql -u ${LOC_USER} ${DST_DB} -e "DROP TABLE ${DST_TBL}"
+      err_code=$?
+     if [[ $err_code != 0 ]]
+     then
+         echoerr "MySQL error while dropping '${DST_DB}.${DST_TBL}'. Quitting."
+         exit $err_code
+     fi
+  fi
+
+  if [[ ${VERBOSE} -ne 0 ]]
+  then
+      echo "Done."
+  fi
+
+fi
+
+# Rename src table to dest table:
+
+if [[ ${VERBOSE} -ne 0 ]]
+then
+    echo "Renaming ${LOC_DB}.${LOC_TBL} to ${DST_DB}.${DST_TBL}..."
+fi
+
+mysql --login-path=${LOC_USER} ${DST_DB} -e "RENAME TABLE ${LOC_DB}.${LOC_TBL} TO ${DST_DB}.${DST_TBL}" 2>/dev/null
+
+if [[ $? != 0 ]]
+then
+    # Try once more with -u and no pwd:
+    mysql -u ${LOC_USER} ${DST_DB} -e "RENAME TABLE ${LOC_DB}.${LOC_TBL} TO ${DST_DB}.${DST_TBL}"
+    err_code=$?
+   if [[ $err_code != 0 ]]
+   then
+       echoerr "MySQL error while renaming '${LOC_DB}.${LOC_TBL}' to '${DST_DB}.${DST_TBL}'. Quitting."
+       exit $err_code
+   fi
+fi
+
+if [[ ${VERBOSE} -ne 0 ]]
+then
+    echo "Done."
+fi
+
+exit 0

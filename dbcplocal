@@ -1,0 +1,207 @@
+#!/usr/bin/env bash
+
+# Copy table T within localhost. The destination name of the table 
+# can be changed.
+#
+# Examples:
+#
+# 1   ./dbcplocal localUsrName localDb localTbl newLocalTblName
+# 2   ./dbcplocal --dstDb=dstDb localUsrName localDb localTbl newTblName
+# 3   ./dbcplocal --dstDb=dstDb localUsrName localDb localTbl
+# 4   ./dbcplocal localUsrName localDb localTbl
+#
+# 1: copy local table localTbl from localhost's localDb to
+#     a new table newLocalTblName in localDb.
+# 2: like 1, but copy to different db: dstDb.
+# 3: like 2, but destination table name will have same name as 
+#     source table: localTl.
+# 4: Error: cannot copy table into itself.
+
+# Prerequisites:
+#   o Must have --login-path set up
+#   o Must have privileges to DROP, CREATE, INSERT, and
+#     maybe more.
+
+CURR_DIR=$(dirname $0)
+source ${CURR_DIR}/db_series_helper.sh
+
+
+read -r -d '' USAGE <<EOF
+Usage: $(basename $0) [-h | --help] [-d | --dstDb] [ -v | --verbose ] [ -b | --backup ] locUser locDb locTbl [newLocTbl]
+EOF
+
+if [ "$(uname)" == "Darwin" ]
+then
+    if [[ ! -e /usr/local/Cellar/gnu-getopt/1.1.6/bin/getopt ]]
+    then
+        echoerr "Getopt program on Mac is incompatible. Do: 'brew install gnu-getopt' and try again."
+        exit 1
+    fi
+    getopt="/usr/local/Cellar/gnu-getopt/1.1.6/bin/getopt"
+else
+    getopt=$(which getopt)
+fi
+
+#echo "getopt: $getopt"
+
+OPTS=$(${getopt} --options hbvd: --long help,backup,verbose,dstDb: -- "$@")
+
+if [ $? != 0 ]
+then 
+   echoerr "Failed parsing options; ${USAGE}"
+   exit 1
+fi
+
+VERBOSE=0
+BACKUP=0
+
+eval set -- $OPTS
+
+while true; do
+  case "$1" in
+    -d | --dstDb ) DST_DB="$2"; shift; shift ;;
+    -b | --backup ) BACKUP=1; shift ;;
+    -v | --verbose ) VERBOSE=1; shift ;;
+    -h | --help ) echo $USAGE; exit 0 ;;
+    -- ) shift; 
+	 break ;;
+    * ) echoerr "Could not assign options." ; 
+	exit 1 ;;
+  esac
+done
+
+if [[ $# < 3 ]]
+then
+    echoerr "Too few arguments. ${USAGE}"
+    exit 1
+fi
+
+
+LOC_USER=$1
+LOC_DB=$2
+LOC_TBL=$3
+if [[ -z $4 ]]
+then
+    DST_TBL=${LOC_TBL}
+else
+    DST_TBL=$4
+fi
+
+# Default: copy to same db as where source tbl lives:
+if [[ -z $DST_DB ]]
+then
+    DST_DB=${LOC_DB}
+fi
+
+# Check that both databases exist:
+if [[ $(db_exists ${LOC_USER} ${LOC_DB}) -eq 0 ]]
+then
+   echoerr "dbcplocal: local origin db ${LOC_DB} does not exist. Nothing done."
+   exit 1
+fi
+
+if [[ $DST_DB != $LOC_DB  && $(db_exists ${LOC_USER} ${DST_DB}) -eq 0 ]]
+then
+   echoErr "dbcplocal: local destination db ${DST_DB} does not exist. Nothing done."
+   exit 1
+fi
+
+# New table is to reside in same db as
+# source table, ensure different names:
+if [[ ${LOC_DB} == ${DST_DB} && ${LOC_TBL} == ${DST_TBL} ]]
+then
+    echoerr "Cannot copy table into itself."
+    exit 1
+fi
+
+#**********
+# echo "LOC_USER: '$LOC_USER'"
+# echo "LOC_DB: '$LOC_DB'"
+# echo "LOC_TBL: '$LOC_TBL'"
+# echo "DST_DB: '$DST_DB'"
+# echo "DST_TBL: '$DST_TBL'"
+#**********
+
+# ------------ Backup dest tbl if it exists, and is requested ----------
+
+# Determine whether destination table already
+# exists at dest db:
+
+if [[ ${VERBOSE} -ne 0 ]]
+then
+    echo "Checking whether ${DST_DB}.${DST_TBL} exists..."
+fi
+
+DST_TBL_EXISTS=$(tbl_exists ${LOC_USER} ${DST_DB} ${DST_TBL})
+
+if [[ ${VERBOSE} -ne 0 ]]
+then
+    echo "Result of ${DST_DB}.${DST_TBL} existence check: ${DST_TBL_EXISTS}"
+fi
+
+if [[ ${BACKUP} -ne 0 && ${DST_TBL_EXISTS} -ne 0 ]]
+then
+
+   if [[ ${VERBOSE} -ne 0 ]]
+   then
+       echo "Finding backup name for ${DST_DB}.${DST_TBL}..."
+   fi
+
+   # Find a backup name for the dest tbl that's not taken:
+   BACKUP_NAME=$(new_tbl_name ${LOC_USER} ${DST_DB} ${DST_TBL}_old)
+
+   if [[ ${VERBOSE} -ne 0 ]]
+   then
+       echo "Renaming ${DST_DB}.${DST_TBL} to ${DST_DB}.${BACKUP_NAME}..."
+   fi
+
+   read -rd '' MYSQL_CMD <<EOF
+   RENAME TABLE ${DST_DB}.${DST_TBL} TO ${DST_DB}.${BACKUP_NAME};
+EOF
+   RES=$(mysql --login-path=${LOC_USER} -e "${MYSQL_CMD}")
+
+   if [[ $? -ne 0 ]]
+   then
+       echo "Could not back up ${DST_DB}.${DST_TBL} TO ${DST_DB}.${BACKUP_NAME}.  Nothing done. Quitting."
+       exit 1
+   fi
+
+   if [[ ${VERBOSE} -ne 0 ]]
+   then
+       echo "Done renaming."
+   fi
+
+   # Destination table no longer exists:
+   DST_TBL_EXISTS=0
+fi
+
+# If the local table exists, but no backup was requested,
+# refuse to overwrite local table:
+
+if [[ $DST_TBL_EXISTS -ne 0 ]]
+then
+    echoerr "Table ${DST_DB}.${DST_TBL}; use --backup option, or remove table first."
+    exit 1
+fi    
+
+read -r -d '' COPY_CMD <<EOF
+CREATE TABLE ${DST_DB}.${DST_TBL} LIKE ${LOC_DB}.${LOC_TBL};
+LOCK TABLES ${DST_DB}.${DST_TBL} WRITE, ${LOC_DB}.${LOC_TBL} READ;
+ALTER TABLE ${DST_DB}.${DST_TBL} DISABLE KEYS;
+INSERT INTO ${DST_DB}.${DST_TBL} SELECT * FROM ${LOC_DB}.${LOC_TBL};
+ALTER TABLE ${DST_DB}.${DST_TBL} ENABLE KEYS;
+UNLOCK TABLES;
+EOF
+
+if [[ ${VERBOSE} -ne 0 ]]
+then
+    echo "Copying table ${LOC_DB}.${LOC_TBL} to ${DST_DB}.${DST_TBL}..."
+fi
+#echo "${COPY_CMD}"
+mysql --login-path=${LOC_USER} ${LOC_DB} -e "$COPY_CMD"
+
+if [[ ${VERBOSE} -ne 0 ]]
+then
+    echo "Done copying table ${LOC_DB}.${LOC_TBL} to ${DST_DB}.${DST_TBL}."
+    echo "Command done."
+fi

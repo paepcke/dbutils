@@ -1,0 +1,162 @@
+#!/usr/bin/env bash
+
+# Drop table T within localhost as per Unix 'rm' command.
+#
+# Examples:
+#
+# 1   ./dbrmlocal mySQLUsrName myDb myTbl
+# 2   ./dbrmlocal mySQLUsrName myDb myTbl1 myTbl2 myTbl3
+#
+# 1:   o If myDb.myTbl exists, is dropped. Else
+#        nothing happens, and 
+#           dbrm: myDb: No such database; nothing done.
+#        or:
+#           dbrm: myTbl: No such table
+#        is written to the console.
+#
+# 2:   o All tables are dropped. With the -v
+#        option, removal of each is announced.
+#        With the -i option, confirmation is
+#        solicited before each drop.
+#
+# Prerequisites:
+#   o Must have --login-path set up for the specified user.
+#   o Given user must have privileges to DROP, CREATE, INSERT
+
+CURR_DIR=$(dirname $0)
+source ${CURR_DIR}/db_series_helper.sh
+
+read -r -d '' USAGE <<EOF
+Usage: $(basename $0) [-h|--help] [-v|--verbose] [-i|--interactive] mySQLUser db tbl [tbl [tbl]]
+EOF
+
+# Running on Macos?
+if [ "$(uname)" == "Darwin" ]
+then
+    if [[ ! -e /usr/local/Cellar/gnu-getopt/1.1.6/bin/getopt ]]
+    then
+        echoerr "Getopt program on Mac is incompatible. Do: 'brew install gnu-getopt' and try again."
+        exit 1
+    fi
+    getopt="/usr/local/Cellar/gnu-getopt/1.1.6/bin/getopt"
+else
+    getopt=$(which getopt)
+fi
+
+#echo "getopt: $getopt"
+
+OPTS=$(${getopt} --options hvi --long help,verbose,interactive -- "$@")
+
+if [ $? != 0 ]
+then 
+   echoerr "Failed parsing options; ${USAGE}"
+   exit 1
+fi
+
+eval set -- $OPTS
+
+VERBOSE=0
+INTERACTIVE=0
+
+while true; do
+  case "$1" in
+    -v | --verbose ) VERBOSE=1; shift;;
+    -i | --interactive ) INTERACTIVE=1; shift;;
+    -h | --help ) echo $USAGE; exit 0 ;;
+    -- ) shift; 
+	 break ;;
+    * ) echoerr "Could not assign options." ; 
+	exit 1 ;;
+  esac
+done
+
+if [[ $# < 3 ]]
+then
+    echoerr "Too few arguments. ${USAGE}"
+    exit 1
+fi
+
+LOC_USER=$1
+LOC_DB=$2
+shift; shift
+LOC_TBLS=$@
+
+#**********
+# echo "LOC_USER: '$LOC_USER'"
+# echo "LOC_DB: '$LOC_DB'"
+# echo "LOC_TBLS: '$LOC_TBLS'"
+# exit
+#**********
+
+#----------------------------- DB Existence Check --------------------------
+
+LOC_DB_EXISTS=$(db_exists $LOC_USER $LOC_DB)
+
+if [[ ${LOC_DB_EXISTS} -eq 0 ]]
+then
+   echoerr "dbrmlocal: ${LOC_DB}: No such database; nothing done."
+   exit 1
+fi
+
+#--------- Do the Drops one at a time --------------
+
+for TBL in ${LOC_TBLS}
+do
+    # Ensure that table exists
+
+    TBL_EXISTS=$(tbl_exists ${LOC_USER} ${LOC_DB} ${TBL})
+
+    if [[ ${TBL_EXISTS} == 0 ]]
+    then
+        echowarn "dbrm: ${TBL}: No such table; skipping."
+        continue
+    fi
+
+    # If requested, ask whether to remove this table:
+    DO_IT=1
+
+    if [[ ${INTERACTIVE} == 1 ]]
+    then
+        read -p "Drop table ${TBL}[yN]? " -n 1 -r
+        # If user entered a letter, add a newline:
+        if [[ ${REPLY} != '' ]]
+        then
+            echo
+        fi
+
+        if [[ $REPLY =~ ^[yN]$ ]]
+        then
+            # Explicit Yes:
+            DO_IT=1
+        else
+            DO_IT=0
+            echo "Skipping table ${TBL}"
+        fi
+    fi
+
+    # If user answered 'n', or just ENTER,
+    # then skip this table:
+
+    if [[ ${DO_IT} != 1 ]]
+    then
+        continue
+    fi
+
+    if [[ ${VERBOSE} -ne 0 ]]
+    then
+        echo "Dropping table ${TBL}..."
+    fi
+
+    mysql --login-path=${LOC_USER} ${LOC_DB} -e "DROP TABLE ${TBL}"
+    
+    if [[ $? != 0 ]]
+    then
+       echoerr "MySQL error while dropping '${TBL}'. Quitting"
+       exit 1
+    fi
+
+    if [[ ${VERBOSE} -ne 0 ]]
+    then
+        echo "Done."
+    fi
+done

@@ -1,0 +1,201 @@
+#!/usr/bin/env bash
+
+# Copy table T from remote to a database at localhost
+# host. The local name of the table, and local db can
+# be changed.
+#
+#********: doc remSSHUser and -b/--backup
+# Examples:
+#
+# 1   ./dbcpfrom sshUser@remoteMachine meOnRemMySQL remoteDb remoteTbl
+# 2   ./dbcpfrom --locTbl=localTbl sshUser@remoteMachine meOnRemMySQL remoteDb remoteTbl
+# 3   ./dbcpfrom --locUser=localUsrName --locDb=localDb --locTbl=localTbl sshUser@remoteMachine meOnRemMySQL remoteDb remoteTbl
+#
+# 1: copy remote table remoteTbl from remoteMachine's remoteDb to the local MySQL
+#     server. Use the same database and table names, and
+#     the same user at the local end as on the remote end.
+# 2: like 1, but call the table 'localTbl' at localhost.
+# 3: different MySQL user, db, and table names at localhost than
+#     at the remote side.
+#
+# Prerequisites:
+#   o Must have --login-path set up in both sites.
+#   o Must have privileges to SELECT, and maybe more
+#      at the remote site.
+
+CURR_DIR=$(dirname $0)
+source ${CURR_DIR}/db_series_helper.sh
+
+read -r -d '' USAGE <<EOF
+Usage: $(basename $0) [-h | --help] [-v | --verbose] [-u | --locUser] [-d | --locDb] [-t | --locTbl] [-b | --backup ] sshDest remMySQLUser remDb remTbl 
+EOF
+
+if [ "$(uname)" == "Darwin" ]
+then
+    if [[ ! -e /usr/local/Cellar/gnu-getopt/1.1.6/bin/getopt ]]
+    then
+        echoerr "Getopt program on Mac is incompatible. Do: 'brew install gnu-getopt' and try again."
+        exit 1
+    fi
+    getopt="/usr/local/Cellar/gnu-getopt/1.1.6/bin/getopt"
+else
+    getopt=$(which getopt)
+fi
+
+#echo "getopt: $getopt"
+
+OPTS=$(${getopt} --options hvbu:d:t: --long help,verbose,backup,locUser:,locDb:,locTbl: -- "$@")
+
+if [ $? != 0 ]
+then 
+   echoerr "Failed parsing options; ${USAGE}"
+   exit 1
+fi
+
+eval set -- $OPTS
+VERBOSE=0
+BACKUP=0
+
+while true; do
+  case "$1" in
+    -u | --locUser ) LOC_USER="$2"; shift; shift ;;
+    -d | --locDb ) LOC_DB="$2"; shift; shift ;;
+    -t | --locTbl ) LOC_TBL="$2"; shift; shift ;;
+    -b | --backup ) BACKUP=1; shift ;;
+    -v | --verbose ) VERBOSE=1; shift ;;
+    -h | --help ) echo $USAGE; exit 0 ;;
+    -- ) shift; 
+	 break ;;
+    * ) echoerr "Could not assign options." ; 
+	exit 1 ;;
+  esac
+done
+
+if [[ $# < 4 ]]
+then
+    echoerr "Too few arguments. ${USAGE}"
+    exit 1
+fi
+
+
+SSH_DEST=$1
+REM_MYSQL_USER=$2
+REM_DB=$3
+REM_TBL=$4
+
+
+if [[ -z $LOC_USER ]]
+then
+    LOC_USER=${REM_MYSQL_USER}
+fi
+
+if [[ -z $LOC_DB ]]
+then
+    LOC_DB=${REM_DB}
+fi
+
+if [[ -z $LOC_TBL ]]
+then
+    LOC_TBL=${REM_TBL}
+fi
+
+#***************
+# echo "SSH_DEST: '$SSH_DEST'"
+# echo
+# echo "REM_USER: '$REM_USER'"
+# echo "REM_DB: '$REM_DB'"
+# echo "REM_TBL: '$REM_TBL'"
+# echo
+# echo "LOC_USER: '$LOC_USER'"
+# echo "LOC_DB: '$LOC_DB'"
+# echo "LOC_TBL: '$LOC_TBL'"
+#***************
+
+# ------------ Backup dest tbl if it exists, and is requested ----------
+
+# Determine whether destination table already
+# exists. 
+
+
+DST_TBL_EXISTS=$(tbl_exists ${LOC_USER} ${LOC_DB} ${LOC_TBL})
+
+if [[ ${BACKUP} -ne 0 && ${DST_TBL_EXISTS} -ne 0 ]]
+then
+
+   # Find a backup name for the dest tbl that's not taken:
+   BACKUP_NAME=$(new_tbl_name ${LOC_USER} ${LOC_DB} ${LOC_TBL}_old)
+
+   if [[ ${VERBOSE} -ne 0 ]]
+   then
+       echo "Renaming ${LOC_DB}.${LOC_TBL} to ${LOC_DB}.${BACKUP_NAME}..."
+   fi
+
+   mysql --login-path=${LOC_USER} ${LOC_DB} -e "RENAME TABLE ${LOC_TBL} TO ${BACKUP_NAME}" 2>/dev/null
+
+   if [[ $? != 0 ]]
+   then
+       # Try once more with -u and no pwd:
+       mysql -u ${LOC_USER} ${LOC_DB} -e "RENAME TABLE ${LOC_TBL} TO ${BACKUP_NAME}"
+       err_code=$?
+       if [[ $err_code != 0 ]]
+       then
+           echoerr "MySQL error while renaming '${LOC_DB}.${LOC_TBL}' to '${LOC_DB}.${BACKUP_NAME}'. Quitting."
+           exit $err_code
+       fi
+   fi
+
+   # Destination table no longer exists:
+   DST_TBL_EXISTS=0
+fi
+
+# If the local table exists, but no backup was requested,
+# refuse to overwrite local table:
+
+if [[ $DST_TBL_EXISTS -ne 0 ]]
+then
+    echoerr "Table localhost.${LOC_TBL} exists; use --backup option, or remove localhost.${LOC_TBL} first, e.g. using dbrm ${LOC_TBL}"
+    exit 1
+fi    
+
+
+# ---------------------- Do the copying -----------------------
+
+if [[ ${LOC_TBL} != ${REM_TBL} ]]
+then
+    # The sed replaces the local table's name with the remote
+    # table's name in the mysqldump output:
+    CMD="ssh ${SSH_DEST} 'mysqldump --login-path=${REM_MYSQL_USER} ${REM_DB} ${REM_TBL}' |\
+           sed \"s/${REM_TBL}/${LOC_TBL}/g\" |\
+           mysql --login-path=${LOC_USER} ${LOC_DB}"
+else
+    CMD="ssh ${SSH_DEST} 'mysqldump --login-path=${REM_MYSQL_USER} ${REM_DB} ${REM_TBL}' |\
+           mysql --login-path=${LOC_USER} ${LOC_DB}"
+fi
+
+#echo $CMD
+
+if [[ ${VERBOSE} -ne 0 ]]
+then
+    echo "Starting copy ${REM_MYSQL_USER}@${REM_MACHINE}:${REM_DB}.${REM_TBL} to ${LOC_USER}@localhost:${LOC_DB}.${LOC_TBL}"
+fi
+
+eval ${CMD}
+
+RET_CODE=$?
+
+if [[ $RET_CODE == 0 ]]
+then
+    if [[ ${VERBOSE} -ne 0 ]]
+    then
+        echo "Done copy"
+    fi
+    exit 0
+else
+    if [[ ${VERBOSE} -ne 0 ]]
+    then
+        echo "Copy failed."
+    fi
+    exit 1
+fi
+
+    
