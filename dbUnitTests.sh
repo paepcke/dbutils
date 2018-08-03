@@ -1,5 +1,26 @@
 #!/usr/bin/env bash
 
+#----------------------------------------------------------
+#
+# Unit tests for the database command line interface utilities:
+#
+#    dbcpfrom
+#    dbcpto
+#    dbcplocal
+#    dbmv
+#    dbmvlocal
+#    dbrm
+#    dbrmlocal
+#
+# The calling user must have a --login-path set up for accessing
+# MySQL. The user must also have permission to ssh into localhost
+# without pwd; i.e. via key. That restriction is true for this test
+# script and for the CLI tools that reach across machines. I.e. whose
+# names don't end in 'local'
+#
+#----------------------------------------------------------
+
+
 SCRIPT_NAME=$(basename $0)
 
 MYSQL_UID=$(whoami)
