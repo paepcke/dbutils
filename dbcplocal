@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
 
+# Unix-like shell level manipulation of MySQL tables.
+#
 # Copy table T within localhost. The destination name of the table 
 # can be changed.
+# Using the --where option allows the caller
+# to include only a limited number of rows.
+
 #
 # Examples:
 #
@@ -9,6 +14,7 @@
 # 2   ./dbcplocal --dstDb=dstDb localUsrName localDb localTbl newTblName
 # 3   ./dbcplocal --dstDb=dstDb localUsrName localDb localTbl
 # 4   ./dbcplocal localUsrName localDb localTbl
+# 5   ./dbcplocal --where="employee = 'smith'" localUsrName localDb localTbl
 #
 # 1: copy local table localTbl from localhost's localDb to
 #     a new table newLocalTblName in localDb.
@@ -27,7 +33,7 @@ source ${CURR_DIR}/db_series_helper.sh
 
 
 read -r -d '' USAGE <<EOF
-Usage: $(basename $0) [-h | --help] [-d | --dstDb] [ -v | --verbose ] [ -b | --backup ] locUser locDb locTbl [newLocTbl]
+Usage: $(basename $0) [-h|--help] [-d |--dstDb] [-v|--verbose] [-b|--backup] [-w|--where] locUser locDb locTbl [newLocTbl]
 EOF
 
 if [ "$(uname)" == "Darwin" ]
@@ -44,7 +50,7 @@ fi
 
 #echo "getopt: $getopt"
 
-OPTS=$(${getopt} --options hbvd: --long help,backup,verbose,dstDb: -- "$@")
+OPTS=$(${getopt} --options hbvd:w: --long help,backup,verbose,dstDb:,where: -- "$@")
 
 if [ $? != 0 ]
 then 
@@ -62,6 +68,7 @@ while true; do
     -d | --dstDb ) DST_DB="$2"; shift; shift ;;
     -b | --backup ) BACKUP=1; shift ;;
     -v | --verbose ) VERBOSE=1; shift ;;
+    -w | --where ) WHERE_CLAUSE="$2"; shift; shift ;;
     -h | --help ) echo $USAGE; exit 0 ;;
     -- ) shift; 
 	 break ;;
@@ -114,12 +121,21 @@ then
     exit 1
 fi
 
+if [[ -n ${WHERE_CLAUSE} ]]
+then   
+    WHERE_CLI_OPTION='where '${WHERE_CLAUSE}
+fi
+
+
 #**********
 # echo "LOC_USER: '$LOC_USER'"
 # echo "LOC_DB: '$LOC_DB'"
 # echo "LOC_TBL: '$LOC_TBL'"
 # echo "DST_DB: '$DST_DB'"
 # echo "DST_TBL: '$DST_TBL'"
+# echo "WHERE_CLAUSE: '$WHERE_CLAUSE'"
+# echo "WHERE_CLI_OPTION: '$WHERE_CLI_OPTION'"
+# exit
 #**********
 
 # ------------ Backup dest tbl if it exists, and is requested ----------
@@ -180,7 +196,7 @@ fi
 
 if [[ $DST_TBL_EXISTS -ne 0 ]]
 then
-    echoerr "Table ${DST_DB}.${DST_TBL}; use --backup option, or remove table first."
+    echoerr "Table ${DST_DB}.${DST_TBL} exists; use --backup option, or remove table first."
     exit 1
 fi    
 
@@ -188,7 +204,7 @@ read -r -d '' COPY_CMD <<EOF
 CREATE TABLE ${DST_DB}.${DST_TBL} LIKE ${LOC_DB}.${LOC_TBL};
 LOCK TABLES ${DST_DB}.${DST_TBL} WRITE, ${LOC_DB}.${LOC_TBL} READ;
 ALTER TABLE ${DST_DB}.${DST_TBL} DISABLE KEYS;
-INSERT INTO ${DST_DB}.${DST_TBL} SELECT * FROM ${LOC_DB}.${LOC_TBL};
+INSERT INTO ${DST_DB}.${DST_TBL} SELECT * FROM ${LOC_DB}.${LOC_TBL} ${WHERE_CLI_OPTION};
 ALTER TABLE ${DST_DB}.${DST_TBL} ENABLE KEYS;
 UNLOCK TABLES;
 EOF

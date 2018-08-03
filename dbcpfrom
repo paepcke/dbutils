@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 
+# Unix-like shell level manipulation of MySQL tables.
 # Copy table T from remote to a database at localhost
 # host. The local name of the table, and local db can
-# be changed.
+# be changed. Using the --where option allows the caller
+# to include only a limited number of rows.
 #
 #********: doc remSSHUser and -b/--backup
 # Examples:
@@ -10,6 +12,7 @@
 # 1   ./dbcpfrom sshUser@remoteMachine meOnRemMySQL remoteDb remoteTbl
 # 2   ./dbcpfrom --locTbl=localTbl sshUser@remoteMachine meOnRemMySQL remoteDb remoteTbl
 # 3   ./dbcpfrom --locUser=localUsrName --locDb=localDb --locTbl=localTbl sshUser@remoteMachine meOnRemMySQL remoteDb remoteTbl
+# 4   ./dbcpfrom --where "employee = 'smith'" sshUser@remoteMachine meOnRemMySQL remoteDb remoteTbl
 #
 # 1: copy remote table remoteTbl from remoteMachine's remoteDb to the local MySQL
 #     server. Use the same database and table names, and
@@ -27,7 +30,7 @@ CURR_DIR=$(dirname $0)
 source ${CURR_DIR}/db_series_helper.sh
 
 read -r -d '' USAGE <<EOF
-Usage: $(basename $0) [-h | --help] [-v | --verbose] [-u | --locUser] [-d | --locDb] [-t | --locTbl] [-b | --backup ] sshDest remMySQLUser remDb remTbl 
+Usage: $(basename $0) [-h | --help] [-v | --verbose] [-u | --locUser] [-d | --locDb] [-t | --locTbl] [-b | --backup ] [-w --where] sshDest remMySQLUser remDb remTbl 
 EOF
 
 if [ "$(uname)" == "Darwin" ]
@@ -44,7 +47,7 @@ fi
 
 #echo "getopt: $getopt"
 
-OPTS=$(${getopt} --options hvbu:d:t: --long help,verbose,backup,locUser:,locDb:,locTbl: -- "$@")
+OPTS=$(${getopt} --options hvbu:d:t:w: --long help,verbose,backup,locUser:,locDb:,locTbl:,where: -- "$@")
 
 if [ $? != 0 ]
 then 
@@ -63,6 +66,7 @@ while true; do
     -t | --locTbl ) LOC_TBL="$2"; shift; shift ;;
     -b | --backup ) BACKUP=1; shift ;;
     -v | --verbose ) VERBOSE=1; shift ;;
+    -w | --where ) WHERE_CLAUSE="$2"; shift; shift ;;
     -h | --help ) echo $USAGE; exit 0 ;;
     -- ) shift; 
 	 break ;;
@@ -83,6 +87,21 @@ REM_MYSQL_USER=$2
 REM_DB=$3
 REM_TBL=$4
 
+# The where clause might contain double quotes.
+# those need to be escaped before use with mysqldump.
+# (-n: if string not empty). I.e. turn a CLI term
+#       dbcpfrom --where "employee = 'smith'" ...
+# into  --where="employee = 'smith'"
+#
+#   but dbcpfrom --where 'employee = "smith"' ...
+# into --where="employee = \"smith\""
+# So the env var will work with myslqdump below:
+
+if [[ -n $WHERE_CLAUSE ]]
+then
+    WHERE_CLI_OPTION=$(echo $WHERE_CLAUSE | sed 's/"/\\"/g')
+    WHERE_CLI_OPTION=--where=\"$WHERE_CLI_OPTION\"
+fi
 
 if [[ -z $LOC_USER ]]
 then
@@ -100,6 +119,7 @@ then
 fi
 
 #***************
+# echo
 # echo "SSH_DEST: '$SSH_DEST'"
 # echo
 # echo "REM_USER: '$REM_USER'"
@@ -109,6 +129,9 @@ fi
 # echo "LOC_USER: '$LOC_USER'"
 # echo "LOC_DB: '$LOC_DB'"
 # echo "LOC_TBL: '$LOC_TBL'"
+# echo "WHERE_CLAUSE: '$WHERE_CLAUSE'"
+# echo "WHERE_CLI_OPTION: '$WHERE_CLI_OPTION'"
+#exit 0
 #***************
 
 # ------------ Backup dest tbl if it exists, and is requested ----------
@@ -164,7 +187,7 @@ if [[ ${LOC_TBL} != ${REM_TBL} ]]
 then
     # The sed replaces the local table's name with the remote
     # table's name in the mysqldump output:
-    CMD="ssh ${SSH_DEST} 'mysqldump --login-path=${REM_MYSQL_USER} ${REM_DB} ${REM_TBL}' |\
+    CMD="ssh ${SSH_DEST} 'mysqldump --login-path=${REM_MYSQL_USER} ${WHERE_CLI_OPTION} ${REM_DB} ${REM_TBL}' |\
            sed \"s/${REM_TBL}/${LOC_TBL}/g\" |\
            mysql --login-path=${LOC_USER} ${LOC_DB}"
 else
