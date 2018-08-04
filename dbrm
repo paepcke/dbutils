@@ -87,7 +87,7 @@ REM_TBLS=$@
 # Get remote hostname from the SSH_DEST,
 # which is user@rem_machine. I.e., grab all after
 # the '@' sign:
-REM_MACHINE=$(echo "facdec@localhost" | sed -rn "s/[^@]*@(.*$)/\1/p")
+REM_MACHINE=$(echo "facdec@localhost" | sed -n "s/[^@]*@\(.*$\)/\1/p")
 
 # Check whether can ssh to remote source
 # without pwd:
