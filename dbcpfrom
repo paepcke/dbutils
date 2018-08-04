@@ -87,6 +87,14 @@ REM_MYSQL_USER=$2
 REM_DB=$3
 REM_TBL=$4
 
+# Check whether can ssh to remote source
+# without pwd:
+ssh -oBatchMode=yes ${SSH_DEST}  'whoami'  2>&1>/dev/null
+if [[ $? > 0 ]]
+then
+    echo "If asked for pwd, use ${LOCAL_USER}'s pwd at ${SSH_DEST}."
+fi
+
 # The where clause might contain double quotes.
 # those need to be escaped before use with mysqldump.
 # (-n: if string not empty). I.e. turn a CLI term
@@ -122,7 +130,7 @@ fi
 # echo
 # echo "SSH_DEST: '$SSH_DEST'"
 # echo
-# echo "REM_USER: '$REM_USER'"
+# echo "REM_MYSQL_USER: '$REM_MYSQL_USER'"
 # echo "REM_DB: '$REM_DB'"
 # echo "REM_TBL: '$REM_TBL'"
 # echo
@@ -142,7 +150,7 @@ fi
 
 DST_TBL_EXISTS=$(tbl_exists ${LOC_USER} ${LOC_DB} ${LOC_TBL})
 
-if [[ ${BACKUP} -ne 0 && ${DST_TBL_EXISTS} -ne 0 ]]
+if [[ ${BACKUP} -ne 0 && ${DST_TBL_EXISTS} -ne '0' ]]
 then
 
    # Find a backup name for the dest tbl that's not taken:
@@ -174,9 +182,9 @@ fi
 # If the local table exists, but no backup was requested,
 # refuse to overwrite local table:
 
-if [[ $DST_TBL_EXISTS -ne 0 ]]
+if [[ $DST_TBL_EXISTS -ne '0' ]]
 then
-    echoerr "Table localhost.${LOC_TBL} exists; use --backup option, or remove localhost.${LOC_TBL} first, e.g. using dbrm ${LOC_TBL}"
+    echoerr "Table ${LOC_DB}.${LOC_TBL} exists; use --backup option, or remove localhost.${LOC_TBL} first, e.g. using dbrm ${LOC_TBL}"
     exit 1
 fi    
 
@@ -199,7 +207,7 @@ fi
 
 if [[ ${VERBOSE} -ne 0 ]]
 then
-    echo "Starting copy ${REM_MYSQL_USER}@${REM_MACHINE}:${REM_DB}.${REM_TBL} to ${LOC_USER}@localhost:${LOC_DB}.${LOC_TBL}"
+    echo "Starting copy ${REM_MYSQL_USER}@${SSH_DEST}:${REM_DB}.${REM_TBL} to ${LOC_USER}@localhost:${LOC_DB}.${LOC_TBL}"
 fi
 
 eval ${CMD}

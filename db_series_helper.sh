@@ -217,25 +217,25 @@ function tbl_exists() {
           AND table_name = '${TBL}';
 EOF
 
-  HITS=$(mysql --login-path=${LOC_USER} ${DB} -sN -e "${EXISTS_CMD}" 2>/dev/null)
+  mysql --login-path=${LOC_USER} ${DB} -sN -e "${EXISTS_CMD}" 2>/dev/null
 
-  if [[ $? != 0 ]]
-  then
-      # Try once more with -u and no pwd:
-      HITS=$(mysql -u ${LOC_USER} ${DB} -sN -e "${EXISTS_CMD}")
-      err_code=$?
-      if [[ $err_code != 0 ]]
-      then
-          echoerr "MySQL error while checking existence of '${DB}.${TBL}'. Quitting."
-          exit $err_code
-      fi
-  fi
+  # if [[ $? != 0 ]]
+  # then
+  #     # Try once more with -u and no pwd:
+  #     HITS=$(mysql -u ${LOC_USER} ${DB} -sN -e "${EXISTS_CMD}")
+  #     err_code=$?
+  #     if [[ $err_code != 0 ]]
+  #     then
+  #         echoerr "MySQL error while checking existence of '${DB}.${TBL}'. Quitting."
+  #         exit $err_code
+  #     fi
+  # fi
 
-  if [[ ${HITS} -gt 0 ]]
+  if [[ $? -eq 0 ]]
   then
-     echo 1
+     exit 1
   else
-     echo 0
+     exit 0
   fi
 } # End function tbl_exists
 

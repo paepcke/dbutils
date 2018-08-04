@@ -58,11 +58,6 @@ do
     UNIT_TEST_DB=UnitTests$INDX
 done    
 
-#*******************
-#echo "DB name: '$UNIT_TEST_DB'"
-#exit
-#*******************
-
 function setup() {
     # Ensure that table $UNIT_TEST_DB.DbTests exists:
 
@@ -89,22 +84,31 @@ function finalCleanup() {
     exit 1
 }
 
-
-
 # Setup the db:
+
 setup
+if [[ $? > 0 ]]
+then
+    echo "Error setting up test database and table. Quitting."
+fi
 
 # --------------------------------  dbcpfrom ----------------------------
 
 # Check least complext case:
-dbcpfrom --locTbl=LocalTable localhost ${MYSQL_UID} $UNIT_TEST_DB RemoteTable LocalTable
+dbcpfrom --locTbl=LocalTable localhost ${MYSQL_UID} $UNIT_TEST_DB RemoteTable
+
+if [[ $? != 0 ]]
+then
+    echo "dbcpfrom Simple copy FAILED."
+    finalCleanup
+fi    
 
 RESP=$(mysql --login-path=$MYSQL_UID $UNIT_TEST_DB -e "SELECT * FROM LocalTable")
 if echo $RESP | grep --silent "employee age department smith 40 accounting miller 50 hr"
 then
     echo "dbcpfrom Simple copy...OK"
 else
-    echo "dbcpfrom Simple copy failed."
+    echo "dbcpfrom Simple copy wrong content. FAILED."
     finalCleanup
 fi    
 
@@ -149,6 +153,7 @@ then
     echo "dbcpfrom: make backup...OK"
 else
     echo "dbcpfrom: make backup...Failed"
+    finalCleanup
 fi
    
 #--------------------------------------- dbcplocal -------------------------------
@@ -240,6 +245,7 @@ then
     echo "dbcplocal: make backup...OK"
 else
     echo "dbcplocal: make backup...Failed"
+    finalCleanup
 fi
 
 # --------------------------------  dbcpto ----------------------------
@@ -300,6 +306,7 @@ then
     echo "dbcpto: make backup...OK"
 else
     echo "dbcpto: make backup...Failed"
+    finalCleanup
 fi
 
 
@@ -321,6 +328,18 @@ then
 else
     echo "dbrm simple...OK"    
     finalCleanup
+fi
+
+setup
+
+# Remote table doesn't exist:
+RESP=$(dbrm ${MYSQL_UID}@127.0.0.1 ${MYSQL_UID} $UNIT_TEST_DB LocalTable 2>&1)
+
+if echo $RESP | grep --silent --regexp="Warning.* No such table"
+then
+    echo "dbrm test for remote table not existing OK."
+else
+    echo "dbrm test for remote table not existing FAILED."
 fi
 
 # Removing multiple tables at once:

@@ -85,6 +85,15 @@ LOC_DB=$2
 LOC_TBL=$3
 SSH_DEST=$4
 
+# Check whether can ssh to remote source
+# without pwd:
+ssh -oBatchMode=yes ${SSH_DEST}  'whoami'  2>&1>/dev/null
+if [[ $? > 0 ]]
+then
+    echo "If asked for pwd, use ${LOCAL_USER}'s pwd at ${SSH_DEST}."
+fi
+
+
 # The where clause might contain double quotes.
 # those need to be escaped before use with mysqldump.
 # (-n: if string not empty). I.e. turn a CLI term
@@ -184,12 +193,12 @@ EOF
    DST_TBL_EXISTS=0
 fi
 
-# If the local table exists, but no backup was requested,
-# refuse to overwrite local table:
+# If the remote table exists, but no backup was requested,
+# refuse to overwrite remote table:
 
 if [[ $DST_TBL_EXISTS -ne 0 ]]
 then
-    echoerr "Table ${REM_DB}.${REM_TBL} exists on ${REM_MACHINE}; use --backup option, or remove ${REM_DB}.${REM_TBL} on ${REM_MACHINE} first."
+    echoerr "Table ${REM_DB}.${REM_TBL} exists on ${SSH_DEST}; use --backup option, or remove ${REM_DB}.${REM_TBL} on ${REM_MACHINE} first."
     exit 1
 fi    
 

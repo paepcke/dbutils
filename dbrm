@@ -84,6 +84,23 @@ REM_DB=$3
 shift; shift; shift
 REM_TBLS=$@
 
+# Get remote hostname from the SSH_DEST,
+# which is user@rem_machine. I.e., grab all after
+# the '@' sign:
+REM_MACHINE=$(echo "facdec@localhost" | sed -rn "s/[^@]*@(.*$)/\1/p")
+
+# Check whether can ssh to remote source
+# without pwd:
+LOCAL_USER=$(whoami)
+# Just ssh, and execute simple
+# command at remote machine. BatchMode=yes
+# causes failure immediately if no ssh possible:
+ssh -oBatchMode=yes ${SSH_DEST}  'whoami' 2>&1>/dev/null
+if [[ $? > 0 ]]
+then
+    echo "If asked for pwd, use ${LOCAL_USER}'s pwd at ${SSH_DEST}."
+fi
+
 #**********
 # echo "SSH_DEST: '$SSH_DEST'"
 # echo "REM_MYSQL_USER: '$REM_MYSQL_USER'"
