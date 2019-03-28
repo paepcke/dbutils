@@ -208,11 +208,11 @@ if [[ ${REM_TBL} != ${LOC_TBL} ]]
 then
     # The sed replaces the local table's name with the remote
     # table's name in the mysqldump output:
-    CMD="mysqldump --login-path=${LOC_USER} ${WHERE_CLAUSE} ${LOC_DB} ${LOC_TBL} | \
+    CMD="mysqldump --login-path=${LOC_USER} ${WHERE_CLI_OPTION} ${LOC_DB} ${LOC_TBL} | \
            sed \"s/${LOC_TBL}/${REM_TBL}/g\" |\
            ssh ${SSH_DEST} mysql --login-path=${REM_MYSQL_USER} ${REM_DB}"
 else
-    CMD="mysqldump --login-path=${LOC_USER} ${WHERE_CLAUSE} ${LOC_DB} ${LOC_TBL} | \
+    CMD="mysqldump --login-path=${LOC_USER} ${WHERE_CLI_OPTION} ${LOC_DB} ${LOC_TBL} | \
            ssh ${SSH_DEST} mysql --login-path=${REM_MYSQL_USER} ${REM_DB}"
 fi
 

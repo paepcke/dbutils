@@ -32,6 +32,8 @@ then
    exit 1
 fi   
 
+PATH=.:${PATH}
+
 # Turn tabs to commas in MySQL output.
 # I.e.    foo		bar 	10
 #   ==>   foo,bar,10
