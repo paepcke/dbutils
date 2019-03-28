@@ -212,7 +212,7 @@ then
            sed \"s/${LOC_TBL}/${REM_TBL}/g\" |\
            ssh ${SSH_DEST} mysql --login-path=${REM_MYSQL_USER} ${REM_DB}"
 else
-    CMD="mysqldump --login-path=${LOC_USER} ${LOC_DB} ${LOC_TBL} | \
+    CMD="mysqldump --login-path=${LOC_USER} ${WHERE_CLAUSE} ${LOC_DB} ${LOC_TBL} | \
            ssh ${SSH_DEST} mysql --login-path=${REM_MYSQL_USER} ${REM_DB}"
 fi
 
